@@ -25,34 +25,76 @@
 
   const formats: SessionFormat[] = ['gotg', 'gramjs', 'pyrogram', 'mtcute', 'telethon'];
 
-  // Auto-detection logic
-  let detection = $derived(inputSession.trim() ? detectFormat(inputSession) : null);
+  // Parse multiple sessions
+  let parsedSessions = $derived(
+    inputSession
+      .split(/[\n,]+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 0)
+  );
+
+  let detections = $derived(parsedSessions.map(s => detectFormat(s)));
   
-  let sourceFormat = $derived.by(() => {
+  let sourceFormats = $derived(parsedSessions.map((s, i) => {
     if (manualFormat !== 'auto') return manualFormat;
-    return detection?.format || null;
+    return detections[i]?.format || null;
+  }));
+
+  let decodedDataList = $derived.by(() => {
+    return parsedSessions.map((s, i) => {
+      const fmt = sourceFormats[i];
+      if (!fmt) return null;
+      try {
+        return decodeSession(s, fmt);
+      } catch {
+        return null;
+      }
+    });
   });
 
-  let decodedData = $derived.by(() => {
-    if (!inputSession.trim() || !sourceFormat) return null;
-    try {
-      return decodeSession(inputSession, sourceFormat);
-    } catch {
-      return null;
-    }
-  });
+  let hasValidSession = $derived(decodedDataList.some(d => d !== null));
+  let firstDecodedData = $derived(decodedDataList.find(d => d !== null) || null);
+  let firstSourceFormat = $derived(sourceFormats[decodedDataList.findIndex(d => d !== null)] || null);
+  let firstDetection = $derived(detections[0] || null);
 
   async function handleConvert() {
     allGenerated = null;
-    if (!sourceFormat || !decodedData) {
-      addToast('Cannot convert: invalid or unknown source session.', 'error');
+    if (!hasValidSession) {
+      addToast('Cannot convert: no valid sessions found.', 'error');
       return;
     }
 
     try {
-      const apiId = apiIdStr ? parseInt(apiIdStr, 10) : decodedData.apiId;
-      generatedSession = await encodeSession(decodedData, targetFormat, { apiId: isNaN(apiId!) ? undefined : apiId });
-      addToast(`Converted to ${labelOf(targetFormat)} successfully.`, 'success');
+      const results: string[] = [];
+      let successCount = 0;
+      let failCount = 0;
+      
+      for (let i = 0; i < parsedSessions.length; i++) {
+        const decoded = decodedDataList[i];
+        const srcFmt = sourceFormats[i];
+        if (!decoded || !srcFmt) {
+          failCount++;
+          continue;
+        }
+        
+        const apiId = apiIdStr ? parseInt(apiIdStr, 10) : decoded.apiId;
+        const opts = { apiId: isNaN(apiId!) ? undefined : apiId };
+        
+        try {
+          const res = await encodeSession(decoded, targetFormat, opts);
+          results.push(res);
+          successCount++;
+        } catch (e) {
+          failCount++;
+        }
+      }
+      
+      generatedSession = results.join('\n');
+      if (failCount > 0) {
+        addToast(`Converted ${successCount} session(s), failed ${failCount}.`, 'warning');
+      } else {
+        addToast(`Converted ${successCount} session(s) to ${labelOf(targetFormat)} successfully.`, 'success');
+      }
     } catch (err: any) {
       addToast(`Conversion failed: ${err.message}`, 'error');
     }
@@ -60,27 +102,62 @@
 
   async function handleConvertAll() {
     generatedSession = null;
-    if (!sourceFormat || !decodedData) {
-      addToast('Cannot convert: invalid or unknown source session.', 'error');
+    if (!hasValidSession) {
+      addToast('Cannot convert: no valid sessions found.', 'error');
       return;
     }
 
     try {
-      const apiId = apiIdStr ? parseInt(apiIdStr, 10) : decodedData.apiId;
-      const opts = { apiId: isNaN(apiId!) ? undefined : apiId };
-      const results = {} as Record<SessionFormat, string>;
+      const results = {} as Record<SessionFormat, string[]>;
       for (const fmt of formats) {
-        results[fmt] = await encodeSession(decodedData, fmt, opts);
+        results[fmt] = [];
       }
-      allGenerated = results;
-      addToast('Converted to all formats.', 'success');
+
+      let successCount = 0;
+      let failCount = 0;
+      
+      for (let i = 0; i < parsedSessions.length; i++) {
+        const decoded = decodedDataList[i];
+        const srcFmt = sourceFormats[i];
+        if (!decoded || !srcFmt) {
+          failCount++;
+          continue;
+        }
+
+        const apiId = apiIdStr ? parseInt(apiIdStr, 10) : decoded.apiId;
+        const opts = { apiId: isNaN(apiId!) ? undefined : apiId };
+        
+        let sessionSuccess = true;
+        for (const fmt of formats) {
+          try {
+            const res = await encodeSession(decoded, fmt, opts);
+            results[fmt].push(res);
+          } catch {
+            sessionSuccess = false;
+          }
+        }
+        if (sessionSuccess) successCount++;
+        else failCount++;
+      }
+
+      const finalResults = {} as Record<SessionFormat, string>;
+      for (const fmt of formats) {
+        finalResults[fmt] = results[fmt].join('\n');
+      }
+      allGenerated = finalResults;
+      
+      if (failCount > 0) {
+        addToast(`Converted ${successCount} session(s) to all formats, failed ${failCount}.`, 'warning');
+      } else {
+        addToast(`Converted ${successCount} session(s) to all formats.`, 'success');
+      }
     } catch (err: any) {
       addToast(`Conversion failed: ${err.message}`, 'error');
     }
   }
 
   let showApiIdInput = $derived(
-    decodedData && !decodedData.apiId && 
+    decodedDataList.some(d => d && !d.apiId) && 
     (targetFormat === 'pyrogram' || allGenerated !== null)
   );
 
@@ -101,7 +178,7 @@
     <!-- Input Area -->
     <div class="flex flex-col gap-2">
       <div class="flex items-center justify-between">
-        <label for="conv-input" class="text-xs font-medium text-surface-400 uppercase tracking-wider">Input Session</label>
+        <label for="conv-input" class="text-xs font-medium text-surface-400 uppercase tracking-wider">Input Session(s)</label>
         <button class="text-xs text-primary-400 hover:text-primary-300 font-medium transition-colors flex items-center gap-1 bg-primary-400/10 px-2 py-1 rounded-md" onclick={handlePaste}>
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
           Paste
@@ -111,7 +188,7 @@
         <textarea
           id="conv-input"
           bind:value={inputSession}
-          placeholder="Paste Telethon, GramJS, Kurigram, mtcute, or gotg session here..."
+          placeholder="Paste one or multiple sessions (1 per line or comma separated)..."
           class="w-full h-40 bg-surface-950 border border-surface-800 text-surface-200 text-sm font-mono p-4 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-accent-500/40 focus:border-accent-500/40 transition-all"
           spellcheck="false"
         ></textarea>
@@ -119,14 +196,17 @@
         {#if inputSession.trim()}
           <div class="absolute bottom-3 right-3 flex items-center gap-2" transition:fade>
             {#if manualFormat === 'auto'}
-              {#if detection}
+              {#if firstDetection}
                 <div class="bg-surface-900 border border-surface-700 rounded-lg px-2 py-1.5 flex items-center gap-2">
                   <span class="text-xs text-surface-400">Auto:</span>
-                  <FormatBadge format={detection.format} />
-                  {#if detection.confidence === 'high'}
+                  <FormatBadge format={firstDetection.format} />
+                  {#if firstDetection.confidence === 'high'}
                     <svg class="w-3.5 h-3.5 text-success-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                  {:else if detection.confidence === 'medium'}
+                  {:else if firstDetection.confidence === 'medium'}
                     <svg class="w-3.5 h-3.5 text-warning-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                  {/if}
+                  {#if parsedSessions.length > 1}
+                    <span class="text-xs text-surface-400 border-l border-surface-700 pl-2 ml-1">+{parsedSessions.length - 1} more</span>
                   {/if}
                 </div>
               {:else}
@@ -182,18 +262,19 @@
       <span class="text-xs font-medium text-surface-400 uppercase tracking-wider">Convert To</span>
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
         {#each formats as fmt}
+          {@const isAllSameFormat = parsedSessions.length > 0 && sourceFormats.every(f => f === fmt)}
           <button
             class="relative p-2.5 rounded-lg border text-left transition-all"
             class:border-surface-800={targetFormat !== fmt}
             class:bg-surface-950={targetFormat !== fmt}
             class:hover:border-surface-700={targetFormat !== fmt}
-            class:opacity-40={sourceFormat === fmt}
-            class:cursor-not-allowed={sourceFormat === fmt}
+            class:opacity-40={isAllSameFormat}
+            class:cursor-not-allowed={isAllSameFormat}
             style={targetFormat === fmt ? `border-color: ${FORMAT_META[fmt].color}; background-color: ${FORMAT_META[fmt].color}10;` : ''}
             onclick={() => {
-              if (sourceFormat !== fmt) targetFormat = fmt;
+              if (!isAllSameFormat) targetFormat = fmt;
             }}
-            disabled={sourceFormat === fmt}
+            disabled={isAllSameFormat}
           >
             <div class="flex items-center gap-2">
               <div class="w-2 h-2 rounded-full" style="background-color: {FORMAT_META[fmt].color};"></div>
@@ -209,16 +290,16 @@
       <button
         class="flex-1 bg-accent-600 hover:bg-accent-500 text-white font-medium py-2.5 px-4 rounded-lg transition-colors active:scale-[0.98] flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
         onclick={handleConvert}
-        disabled={!inputSession.trim() || !decodedData || sourceFormat === targetFormat}
+        disabled={!inputSession.trim() || !hasValidSession || (parsedSessions.length > 0 && sourceFormats.every(f => f === targetFormat))}
       >
-        Convert
+        Convert {#if parsedSessions.length > 1}({parsedSessions.length}){/if}
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
       </button>
       <button
         class="px-4 py-2.5 bg-surface-800/60 hover:bg-surface-800 text-surface-300 text-sm font-medium rounded-lg border border-surface-700/50 transition-colors active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
         onclick={handleConvertAll}
         title="Convert to all formats"
-        disabled={!inputSession.trim() || !decodedData}
+        disabled={!inputSession.trim() || !hasValidSession}
       >
         All Formats
       </button>
@@ -227,17 +308,19 @@
 
   <!-- Output Section -->
   <div class="flex flex-col gap-4">
-    {#if decodedData && inputSession.trim()}
+    {#if firstDecodedData && inputSession.trim()}
       <!-- Source Info Panel -->
       <div class="flex flex-col gap-3" transition:fade>
         <div class="flex items-center justify-between">
-          <span class="text-xs font-semibold text-surface-400 uppercase tracking-wider">Decoded</span>
-          {#if sourceFormat}
-            <FormatBadge format={sourceFormat} />
+          <span class="text-xs font-semibold text-surface-400 uppercase tracking-wider">
+            Decoded {#if parsedSessions.length > 1}(1 of {parsedSessions.length}){/if}
+          </span>
+          {#if firstSourceFormat}
+            <FormatBadge format={firstSourceFormat} />
           {/if}
         </div>
         <div class="grid grid-cols-2 gap-x-4 gap-y-2.5">
-          {#each Object.entries(sessionSummary(decodedData)) as [key, val]}
+          {#each Object.entries(sessionSummary(firstDecodedData)) as [key, val]}
             <div class="flex flex-col">
               <span class="text-[10px] text-surface-500 uppercase tracking-wider font-medium">{key}</span>
               <span class="text-sm text-surface-100 truncate" title={val}>{val}</span>
@@ -257,7 +340,7 @@
         {#if allGenerated}
           <div class="flex flex-col gap-3">
             {#each formats as fmt}
-              {#if fmt !== sourceFormat}
+              {#if parsedSessions.length > 1 || fmt !== firstSourceFormat}
                 <SessionOutput format={fmt} sessionString={allGenerated[fmt]} />
               {/if}
             {/each}
@@ -266,14 +349,14 @@
           <SessionOutput format={targetFormat} sessionString={generatedSession} />
         {/if}
       </div>
-    {:else if !decodedData && !inputSession.trim()}
+    {:else if !hasValidSession && !inputSession.trim()}
       <!-- Empty State -->
       <div class="h-full min-h-[400px] flex flex-col items-center justify-center p-8 text-center border border-dashed border-surface-800 rounded-xl">
         <div class="w-12 h-12 rounded-lg bg-surface-900 flex items-center justify-center mb-4 text-surface-600">
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
         </div>
         <p class="text-surface-400 text-sm font-medium mb-1">Ready to Convert</p>
-        <p class="text-xs text-surface-600 max-w-xs">Paste your session string to decode and convert it to other formats.</p>
+        <p class="text-xs text-surface-600 max-w-xs">Paste your session string(s) to decode and convert to other formats.</p>
       </div>
     {/if}
   </div>

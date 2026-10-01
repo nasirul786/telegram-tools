@@ -3,12 +3,18 @@
   import {
     detectFormat,
     decodeSession,
-    bytesToHex
+    bytesToHex,
+    type SessionFormat,
+    FORMAT_META
   } from './engine';
   import FormatBadge from './components/FormatBadge.svelte';
   import { fade } from 'svelte/transition';
 
+  const labelOf = (fmt: SessionFormat) => fmt === 'pyrogram' ? 'Kurigram' : FORMAT_META[fmt].label;
+  const formats: SessionFormat[] = ['gotg', 'gramjs', 'pyrogram', 'mtcute', 'telethon'];
+
   let inputSession = $state<string>('');
+  let manualFormat = $state<SessionFormat | 'auto'>('auto');
   
   // Parse multiple sessions
   let parsedSessions = $derived(
@@ -20,9 +26,14 @@
 
   let detections = $derived(parsedSessions.map(s => detectFormat(s)));
 
+  let sourceFormats = $derived(parsedSessions.map((s, i) => {
+    if (manualFormat !== 'auto') return manualFormat;
+    return detections[i]?.format || null;
+  }));
+
   let decodedDataList = $derived.by(() => {
     return parsedSessions.map((s, i) => {
-      const fmt = detections[i]?.format;
+      const fmt = sourceFormats[i];
       if (!fmt) return null;
       try {
         return decodeSession(s, fmt);
@@ -119,17 +130,49 @@
         
         {#if inputSession.trim()}
           <div class="absolute bottom-3 right-3 flex items-center gap-2" transition:fade>
-            {#if firstDetection}
-              <div class="bg-surface-900 border border-surface-700 rounded-lg px-2 py-1.5 flex items-center gap-2">
-                <span class="text-xs text-surface-400">Auto:</span>
-                <FormatBadge format={firstDetection.format} />
-                {#if parsedSessions.length > 1}
-                  <span class="text-xs text-surface-400 border-l border-surface-700 pl-2 ml-1">+{parsedSessions.length - 1} more</span>
-                {/if}
-              </div>
+            {#if manualFormat === 'auto'}
+              {#if firstDetection}
+                <div class="bg-surface-900 border border-surface-700 rounded-lg px-2 py-1.5 flex items-center gap-2">
+                  <span class="text-xs text-surface-400">Auto:</span>
+                  <FormatBadge format={firstDetection.format} />
+                  {#if firstDetection.confidence === 'high'}
+                    <svg class="w-3.5 h-3.5 text-success-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                  {:else if firstDetection.confidence === 'medium'}
+                    <svg class="w-3.5 h-3.5 text-warning-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                  {/if}
+                  {#if parsedSessions.length > 1}
+                    <span class="text-xs text-surface-400 border-l border-surface-700 pl-2 ml-1">+{parsedSessions.length - 1} more</span>
+                  {/if}
+                </div>
+              {:else}
+                <div class="bg-error-500/10 border border-error-500/20 text-error-400 text-xs px-2.5 py-1.5 rounded-lg font-medium flex items-center gap-1.5">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                  Unknown Format
+                </div>
+              {/if}
             {/if}
           </div>
         {/if}
+      </div>
+    </div>
+
+    <!-- Manual Override -->
+    <div class="flex flex-col gap-1.5 mt-1">
+      <label for="ext-format-override" class="text-xs font-medium text-surface-400 uppercase tracking-wider">Format Override <span class="text-surface-600">(Optional)</span></label>
+      <div class="relative">
+        <select
+          id="ext-format-override"
+          bind:value={manualFormat}
+          class="w-full appearance-none bg-surface-950 border border-surface-800 text-surface-200 text-sm rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-warning-500/40 transition-all"
+        >
+          <option value="auto">Auto-detect (Recommended)</option>
+          {#each formats as fmt}
+            <option value={fmt}>{labelOf(fmt)}</option>
+          {/each}
+        </select>
+        <div class="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-surface-400">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"></path></svg>
+        </div>
       </div>
     </div>
 

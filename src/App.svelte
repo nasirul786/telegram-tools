@@ -3,13 +3,14 @@
   import type { Component } from 'svelte';
   import Toast from './lib/components/Toast.svelte';
 
-  type Tool = 'generator' | 'converter' | 'analyzer' | 'connectivity' | 'reference';
+  type Tool = 'generator' | 'converter' | 'analyzer' | 'connectivity' | 'extractor' | 'reference';
 
   const toolComponents: Record<Tool, () => Promise<Component>> = {
     generator: () => import('./lib/Generator.svelte').then(m => m.default),
     converter: () => import('./lib/Converter.svelte').then(m => m.default),
     analyzer: () => import('./lib/Analyzer.svelte').then(m => m.default),
     connectivity: () => import('./lib/ConnectivityTest.svelte').then(m => m.default),
+    extractor: () => import('./lib/AuthExtractor.svelte').then(m => m.default),
     reference: () => import('./lib/MtprotoReference.svelte').then(m => m.default),
   };
 
@@ -59,6 +60,15 @@
       iconBg: 'bg-success-500/10',
       iconText: 'text-success-400',
       accent: 'border-success-500/25 hover:border-success-500/50',
+    },
+    {
+      id: 'extractor',
+      label: 'Auth Extractor',
+      desc: 'Extract authkey and DC ID from sessions',
+      icon: 'M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4v-3l8.44-8.44A6 6 0 0115 7zm-4 0h.01',
+      iconBg: 'bg-warning-500/10',
+      iconText: 'text-warning-400',
+      accent: 'border-warning-500/25 hover:border-warning-500/50',
     },
     {
       id: 'reference',
